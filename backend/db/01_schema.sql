@@ -22,6 +22,29 @@ BEGIN
     );
 END
 GO
+ 
+-- nuevo
+IF OBJECT_ID(N'dbo.RefreshTokens', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.RefreshTokens
+    (
+        Id        INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+        UserId    INT NOT NULL,
+        TokenHash BINARY(32) NOT NULL,
+        CreatedAt DATETIME2(0) NOT NULL
+            CONSTRAINT DF_RefreshTokens_CreatedAt
+            DEFAULT (SYSUTCDATETIME()),
+        ExpiresAt DATETIME2(0) NOT NULL,
+        RevokedAt DATETIME2(0) NULL,
+
+        CONSTRAINT FK_RefreshTokens_Users
+            FOREIGN KEY (UserId) REFERENCES dbo.Users (Id),
+
+        CONSTRAINT UQ_RefreshTokens_TokenHash
+            UNIQUE (TokenHash)
+    );
+END
+GO
 
 IF OBJECT_ID(N'dbo.WorkOrders', N'U') IS NULL
 BEGIN
@@ -41,3 +64,5 @@ BEGIN
     );
 END
 GO
+
+

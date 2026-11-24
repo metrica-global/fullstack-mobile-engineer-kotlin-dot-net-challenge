@@ -1,92 +1,91 @@
-using System.Data;
+#nullable enable
+
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Data.SqlClient;
+using System.ComponentModel.DataAnnotations;
+using FieldOps.Api.Data;
+using Microsoft.AspNetCore.Authorization;
 
 namespace FieldOps.Api.Controllers
 {
+    [Authorize(Roles = "TECHNICIAN,SUPERVISOR")]
     [ApiController]
     [Route("api/workorders")]
     public class WorkOrdersController : ControllerBase
     {
-        private readonly IConfiguration _config;
+        private readonly WorkOrdersDataAccess _workOrdersDataAccess;
 
-        public WorkOrdersController(IConfiguration config)
+        public WorkOrdersController(
+            WorkOrdersDataAccess workOrdersDataAccess)
         {
-            _config = config;
+            _workOrdersDataAccess = workOrdersDataAccess;
         }
 
-        // GET api/workorders?technicianId=1&status=PENDING
+        // GET api/workorders?status=PENDING
         [HttpGet]
-        public IActionResult GetOrders(string technicianId, string status)
+        public async Task<ActionResult<IReadOnlyList<WorkOrderRecord>>> GetOrders(
+            [FromQuery] string? status,
+            CancellationToken cancellationToken)
         {
-            if (!IsLogged())
+            int? technicianId;
+
+            if (User.IsInRole("SUPERVISOR"))
             {
-                return Unauthorized();
+                technicianId = null;
+            }
+            else if (int.TryParse(
+                User.FindFirst("userId")?.Value,
+                out var authenticatedTechnicianId))
+            {
+                technicianId = authenticatedTechnicianId;
+            }
+            else
+            {
+                return Forbid();
             }
 
-            try
-            {
-                var cn = new SqlConnection(_config.GetConnectionString("FieldOps"));
-                cn.Open();
+            var orders = await _workOrdersDataAccess.GetOrdersAsync(
+                technicianId,
+                status,
+                cancellationToken);
 
-                var sql = "SELECT * FROM WorkOrders WHERE TechnicianId = " + technicianId;
-
-                // 2020-03: filtro por estado para la pantalla nueva de la app
-                if (!string.IsNullOrEmpty(status))
-                {
-                    sql += " AND Status = '" + status + "'";
-                }
-
-                sql += " ORDER BY ScheduledAt";
-
-                var cmd = new SqlCommand(sql, cn);
-                var dt = new DataTable();
-                dt.Load(cmd.ExecuteReader());
-
-                return Ok(dt);
-            }
-            catch (Exception ex)
-            {
-                return Ok(new { ok = false, message = ex.ToString() });
-            }
+            return Ok(orders);
         }
+
 
         // PUT api/workorders/5/status
-        [HttpPut("{id}/status")]
-        public IActionResult UpdateStatus(string id, [FromBody] UpdateStatusRequest request)
+        [Authorize(Roles = "TECHNICIAN")]
+        [HttpPut("{id:int}/status")]
+        public async Task<IActionResult> UpdateStatus(
+            int id,
+            [FromBody] UpdateStatusRequest request,
+            CancellationToken cancellationToken)
         {
-            if (!IsLogged())
+            if (!int.TryParse(User.FindFirst("userId")?.Value, out var technicianId))
             {
-                return Unauthorized();
+                return Forbid();
             }
 
-            try
+            var updated = await _workOrdersDataAccess.UpdateStatusAsync(
+                id,
+                technicianId,
+                request.Status,
+                cancellationToken);
+
+            if (!updated)
             {
-                var cn = new SqlConnection(_config.GetConnectionString("FieldOps"));
-                cn.Open();
-
-                var sql = "UPDATE WorkOrders SET Status = '" + request.Status + "', UpdatedAt = GETDATE() WHERE Id = " + id;
-
-                var cmd = new SqlCommand(sql, cn);
-                cmd.ExecuteNonQuery();
-
-                return Ok(new { ok = true });
+                return NotFound();
             }
-            catch (Exception ex)
-            {
-                return Ok(new { ok = false, message = ex.ToString() });
-            }
+
+            return Ok(new { ok = true });
         }
 
-        private bool IsLogged()
-        {
-            var header = Request.Headers["Authorization"].ToString();
-            return !string.IsNullOrEmpty(header) && header.StartsWith("Bearer ");
-        }
     }
 
-    public class UpdateStatusRequest
+    /// <summary>Datos para cambiar el estado de una orden.</summary>
+    public sealed record UpdateStatusRequest
     {
-        public string Status { get; set; }
+        [Required]
+        [RegularExpression("^(PENDING|IN_PROGRESS|COMPLETED)$")]
+        public string Status { get; init; } = string.Empty;
     }
 }

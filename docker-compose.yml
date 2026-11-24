@@ -38,7 +38,9 @@ services:
       db-init:
         condition: service_completed_successfully
     environment:
+      ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__FieldOps: "Server=sqlserver,1433;Database=FieldOps;User Id=sa;Password=FieldOps_Dev_2024;TrustServerCertificate=True"
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:?Define JWT_SIGNING_KEY en el archivo .env}
     ports:
       - "5080:5080"
 

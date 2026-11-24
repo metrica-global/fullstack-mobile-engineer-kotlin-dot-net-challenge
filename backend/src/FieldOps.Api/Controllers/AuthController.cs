@@ -1,9 +1,10 @@
-using System.Data;
+using System.ComponentModel.DataAnnotations;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
+using FieldOps.Api.Data;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Data.SqlClient;
 using Microsoft.IdentityModel.Tokens;
 
 namespace FieldOps.Api.Controllers
@@ -12,56 +13,141 @@ namespace FieldOps.Api.Controllers
     [Route("api/auth")]
     public class AuthController : ControllerBase
     {
-        private const string SecretKey = "F13ld0ps-2019-clave-para-firmar-tokens-app-movil";
+        private readonly AuthDataAccess _authDataAccess;
+        private readonly SigningCredentials _signingCredentials;
+        private readonly string _issuer;
+        private readonly string _audience;
+        private readonly int _accessTokenMinutes;
+        private readonly int _refreshTokenDays;
 
-        private readonly IConfiguration _config;
-
-        public AuthController(IConfiguration config)
+        public AuthController(
+            AuthDataAccess authDataAccess,
+            SigningCredentials signingCredentials,
+            IConfiguration configuration)
         {
-            _config = config;
+            _authDataAccess = authDataAccess;
+            _signingCredentials = signingCredentials;
+            _issuer = configuration["Jwt:Issuer"]
+                ?? throw new InvalidOperationException("Falta Jwt:Issuer.");
+            _audience = configuration["Jwt:Audience"]
+                ?? throw new InvalidOperationException("Falta Jwt:Audience.");
+            _accessTokenMinutes =
+                configuration.GetValue<int>("Jwt:AccessTokenMinutes");
+            _refreshTokenDays =
+                configuration.GetValue<int>("Jwt:RefreshTokenDays");
+
+            if (_accessTokenMinutes <= 0 || _refreshTokenDays <= 0)
+            {
+                throw new InvalidOperationException(
+                    "Las duraciones de los tokens deben ser mayores que cero.");
+            }
         }
 
         [HttpPost("login")]
-        public IActionResult Login([FromBody] LoginRequest request)
+        public async Task<IActionResult> Login(
+            [FromBody] LoginRequest request,
+            CancellationToken cancellationToken)
         {
-            try
+            var user = await _authDataAccess.LoginAsync(
+                request.Username,
+                request.Password,
+                cancellationToken);
+
+            if (user is null)
             {
-                var cn = new SqlConnection(_config.GetConnectionString("FieldOps"));
-                cn.Open();
-
-                var sql = "SELECT * FROM Users WHERE Username = '" + request.Username + "' AND Password = '" + request.Password + "'";
-
-                var da = new SqlDataAdapter(sql, cn);
-                var dt = new DataTable();
-                da.Fill(dt);
-
-                if (dt.Rows.Count == 0)
+                return Unauthorized(new
                 {
-                    return Ok(new { ok = false, message = "Usuario o clave incorrectos" });
+                    ok = false,
+                    message = "Usuario o clave incorrectos"
+                });
+            }
+
+            var refreshToken = GenerateRefreshToken();
+
+            await _authDataAccess.CreateRefreshTokenAsync(
+                user.Id,
+                HashRefreshToken(refreshToken),
+                DateTime.UtcNow.AddDays(_refreshTokenDays),
+                cancellationToken);
+
+            return Ok(new
+            {
+                ok = true,
+                token = CreateAccessToken(user),
+                refreshToken,
+                user = new[]
+                {
+                    new
+                    {
+                        id = user.Id,
+                        username = user.Username,
+                        fullName = user.FullName,
+                        role = user.Role
+                    }
                 }
+            });
+        }
 
-                var row = dt.Rows[0];
+        [HttpPost("refresh")]
+        public async Task<IActionResult> Refresh(
+            [FromBody] RefreshTokenRequest request,
+            CancellationToken cancellationToken)
+        {
+            var newRefreshToken = GenerateRefreshToken();
 
-                var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SecretKey));
-                var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+            var user = await _authDataAccess.RotateRefreshTokenAsync(
+                HashRefreshToken(request.RefreshToken),
+                HashRefreshToken(newRefreshToken),
+                DateTime.UtcNow.AddDays(_refreshTokenDays),
+                cancellationToken);
 
-                var claims = new[]
-                {
-                    new Claim("userId", row["Id"].ToString()),
-                    new Claim("username", row["Username"].ToString()),
-                    new Claim("role", row["Role"].ToString())
-                };
-
-                // la app movil no debe pedir login a cada rato (pedido de operaciones)
-                var jwt = new JwtSecurityToken(claims: claims, signingCredentials: credentials);
-                var token = new JwtSecurityTokenHandler().WriteToken(jwt);
-
-                return Ok(new { ok = true, token = token, user = dt });
-            }
-            catch (Exception ex)
+            if (user is null)
             {
-                return Ok(new { ok = false, message = ex.ToString() });
+                return Unauthorized(new
+                {
+                    ok = false,
+                    message = "Refresh token inválido o vencido"
+                });
             }
+
+            return Ok(new
+            {
+                ok = true,
+                token = CreateAccessToken(user),
+                refreshToken = newRefreshToken
+            });
+        }
+
+        private string CreateAccessToken(UserLoginResult user)
+        {
+            var now = DateTime.UtcNow;
+            var claims = new[]
+            {
+                new Claim("userId", user.Id.ToString()),
+                new Claim("username", user.Username),
+                new Claim("role", user.Role)
+            };
+
+            var jwt = new JwtSecurityToken(
+                issuer: _issuer,
+                audience: _audience,
+                claims: claims,
+                notBefore: now,
+                expires: now.AddMinutes(_accessTokenMinutes),
+                signingCredentials: _signingCredentials);
+
+            return new JwtSecurityTokenHandler().WriteToken(jwt);
+        }
+
+        private static string GenerateRefreshToken()
+        {
+            return Convert.ToBase64String(
+                RandomNumberGenerator.GetBytes(32));
+        }
+
+        private static byte[] HashRefreshToken(string refreshToken)
+        {
+            return SHA256.HashData(Encoding.UTF8.GetBytes(refreshToken));
         }
     }
 
@@ -69,5 +155,12 @@ namespace FieldOps.Api.Controllers
     {
         public string Username { get; set; }
         public string Password { get; set; }
+    }
+
+    /// <summary>Datos para solicitar nuevos tokens.</summary>
+    public sealed record RefreshTokenRequest
+    {
+        [Required]
+        public string RefreshToken { get; init; } = string.Empty;
     }
 }

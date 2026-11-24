@@ -16,12 +16,12 @@ Content-Type: application/json
 ###
 @token = {{login.response.body.token}}
 
-### Ordenes del tecnico 1
-GET {{baseUrl}}/api/workorders?technicianId=1
+### Ordenes del tecnico segun login
+GET {{baseUrl}}/api/workorders
 Authorization: Bearer {{token}}
 
-### Ordenes pendientes del tecnico 1
-GET {{baseUrl}}/api/workorders?technicianId=1&status=PENDING
+### Ordenes pendientes del tecnico segun login
+GET {{baseUrl}}/api/workorders?status=PENDING
 Authorization: Bearer {{token}}
 
 ### Cambiar el estado de la orden 4
@@ -30,5 +30,122 @@ Authorization: Bearer {{token}}
 Content-Type: application/json
 
 {
+  "status": "PENDING"
+}
+
+
+
+
+
+
+### Renovar tokens
+# @name refresh
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{login.response.body.refreshToken}}"
+}
+
+###
+@refreshedToken = {{refresh.response.body.token}}
+
+### Listar órdenes con el access token renovado
+GET {{baseUrl}}/api/workorders
+Authorization: Bearer {{refreshedToken}}
+
+### Reutilizar el refresh token anterior (debe responder 401)
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{login.response.body.refreshToken}}"
+}
+
+
+
+
+
+### PROBAR DEMAS CASOS 
+
+### Sin token: debe responder 401
+GET {{baseUrl}}/api/workorders
+
+### Token inválido: debe responder 401
+GET {{baseUrl}}/api/workorders
+Authorization: Bearer esto-no-es-un-jwt
+
+
+### Login como supervisor
+# @name supervisorLogin
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "admin"
+}
+
+###
+@supervisorToken = {{supervisorLogin.response.body.token}}
+
+### Supervisor consulta todas las órdenes (esperado: 200)
+GET {{baseUrl}}/api/workorders
+Authorization: Bearer {{supervisorToken}}
+
+### Supervisor filtra todas las órdenes pendientes (esperado: 200)
+GET {{baseUrl}}/api/workorders?status=PENDING
+Authorization: Bearer {{supervisorToken}}
+
+### Supervisor intenta cambiar una orden (esperado: 403)
+PUT {{baseUrl}}/api/workorders/4/status
+Authorization: Bearer {{supervisorToken}}
+Content-Type: application/json
+
+{
   "status": "IN_PROGRESS"
 }
+
+### Login como mquispe
+# @name quispeLogin
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "mquispe",
+  "password": "123456"
+}
+
+###
+@quispeToken = {{quispeLogin.response.body.token}}
+
+### mquispe intenta cambiar la orden 4 de jperez (esperado: 404)
+PUT {{baseUrl}}/api/workorders/4/status
+Authorization: Bearer {{quispeToken}}
+Content-Type: application/json
+
+{
+  "status": "IN_PROGRESS"
+}
+
+
+
+
+
+
+### Login para probar expiración
+# @name expiryLogin
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{
+  "username": "jperez",
+  "password": "123456"
+}
+
+###
+@expiringToken = {{expiryLogin.response.body.token}}
+
+### Ejecuta esta petición después de esperar más de 2 minutos: debe responder 401
+GET {{baseUrl}}/api/workorders
+Authorization: Bearer {{expiringToken}}

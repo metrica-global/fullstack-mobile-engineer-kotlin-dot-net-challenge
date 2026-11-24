@@ -1,3 +1,19 @@
 <resources>
     <string name="app_name">FieldOps Técnicos</string>
+    <string name="orders_title">Mis órdenes</string>
+    <string name="orders_header_greeting">Hola</string>
+    <string name="orders_header_format">Hola, %1$s  ·  %2$d pendiente(s)</string>
+    <string name="orders_filter_status_label">Estado:</string>
+    <string name="orders_empty_message">No hay órdenes</string>
+    <string name="orders_error_message">Ocurrió un error al cargar las órdenes</string>
+    <string name="orders_retry_button">Reintentar</string>
+    <string name="orders_menu_logout">Cerrar sesión</string>
+    <string name="orders_change_status_title">%1$s - Cambiar estado</string>
+    <string name="orders_scheduled_format">Programada: %1$s</string>
+    <string name="orders_scheduled_overdue_format">Programada: %1$s   VENCIDA</string>
+    <string name="orders_status_pending">PENDIENTE</string>
+    <string name="orders_status_in_progress">EN PROGRESO</string>
+    <string name="orders_status_completed">COMPLETADA</string>
+    <string name="orders_status_updated">Estado actualizado</string>
+    <string name="orders_status_update_error">No se pudo actualizar</string>
 </resources>

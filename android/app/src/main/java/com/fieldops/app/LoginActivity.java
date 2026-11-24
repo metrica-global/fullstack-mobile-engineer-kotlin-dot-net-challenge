@@ -2,10 +2,8 @@ package com.fieldops.app;
 
 import android.app.ProgressDialog;
 import android.content.Intent;
-import android.content.SharedPreferences;
 import android.os.AsyncTask;
 import android.os.Bundle;
-import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -13,13 +11,18 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AppCompatActivity;
 
+import com.fieldops.app.data.local.SessionManager;
+import com.fieldops.app.ui.orders.OrdersActivity;
+
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 
 public class LoginActivity extends AppCompatActivity {
 
@@ -33,39 +36,42 @@ public class LoginActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_login);
 
+        SessionManager.INSTANCE.init(getApplicationContext());
+
         txtUser = findViewById(R.id.txtUser);
         txtPass = findViewById(R.id.txtPass);
         btnLogin = findViewById(R.id.btnLogin);
 
-        SharedPreferences prefs = getSharedPreferences("fieldops", MODE_PRIVATE);
-
-        // si ya hay sesion entra directo
-        String token = prefs.getString("token", null);
-        if (token != null) {
-            Session.token = token;
-            Session.userId = prefs.getInt("userId", 0);
-            Session.fullName = prefs.getString("fullName", "");
+        // si ya hay sesion protegida en Keystore entra directo
+        if (SessionManager.INSTANCE.hasActiveSession()) {
             startActivity(new Intent(this, OrdersActivity.class));
             finish();
             return;
         }
 
-        // recordar los datos del ultimo ingreso
-        txtUser.setText(prefs.getString("username", ""));
-        txtPass.setText(prefs.getString("password", ""));
+        // recordar solo el ultimo usuario ingresado (nunca la clave)
+        txtUser.setText(SessionManager.INSTANCE.getLastUsername());
 
         btnLogin.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                String u = txtUser.getText().toString();
+                String u = txtUser.getText().toString().trim();
                 String p = txtPass.getText().toString();
-                if (u.equals("") || p.equals("")) {
+                if (u.isEmpty() || p.isEmpty()) {
                     Toast.makeText(LoginActivity.this, "Ingrese usuario y clave", Toast.LENGTH_SHORT).show();
                     return;
-                }
+        }
                 new LoginTask().execute(u, p);
             }
         });
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (progress != null && progress.isShowing()) {
+            progress.dismiss();
+        }
+        super.onDestroy();
     }
 
     class LoginTask extends AsyncTask<String, Void, String> {
@@ -82,57 +88,79 @@ public class LoginActivity extends AppCompatActivity {
         protected String doInBackground(String... params) {
             user = params[0];
             pass = params[1];
+            HttpURLConnection con = null;
             try {
-                URL url = new URL("http://10.0.2.2:5080/api/auth/login");
-                HttpURLConnection con = (HttpURLConnection) url.openConnection();
+                URL url = new URL(Session.BASE_URL + "/api/auth/login");
+                con = (HttpURLConnection) url.openConnection();
                 con.setRequestMethod("POST");
                 con.setRequestProperty("Content-Type", "application/json");
                 con.setDoOutput(true);
 
-                String body = "{\"username\":\"" + user + "\",\"password\":\"" + pass + "\"}";
-                OutputStream os = con.getOutputStream();
-                os.write(body.getBytes());
-                os.close();
+                JSONObject payload = new JSONObject();
+                payload.put("username", user);
+                payload.put("password", pass);
 
-                BufferedReader br = new BufferedReader(new InputStreamReader(con.getInputStream()));
-                StringBuilder sb = new StringBuilder();
-                String line;
-                while ((line = br.readLine()) != null) {
-                    sb.append(line);
+                try (OutputStream os = con.getOutputStream()) {
+                    os.write(payload.toString().getBytes(StandardCharsets.UTF_8));
                 }
-                return sb.toString();
+
+                InputStream stream = con.getResponseCode() >= 400
+                        ? con.getErrorStream()
+                        : con.getInputStream();
+
+                if (stream == null) {
+                    return null;
+                }
+
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        sb.append(line);
+                    }
+                    return sb.toString();
+                }
             } catch (Exception e) {
                 return null;
+            } finally {
+                if (con != null) {
+                    con.disconnect();
+                }
             }
         }
 
         @Override
         protected void onPostExecute(String result) {
-            progress.dismiss();
+            if (progress != null && progress.isShowing()) {
+                progress.dismiss();
+            }
             try {
+                if (result == null) {
+                    Toast.makeText(LoginActivity.this, "Error de conexión", Toast.LENGTH_SHORT).show();
+                    return;
+                }
                 JSONObject json = new JSONObject(result);
-                if (json.getBoolean("ok")) {
+                if (json.optBoolean("ok", false)) {
                     String token = json.getString("token");
+                    String refreshToken = json.optString("refreshToken", "");
                     JSONObject u = json.getJSONArray("user").getJSONObject(0);
 
-                    Log.d("FieldOps", "login ok user=" + user + " token=" + token);
-
-                    Session.token = token;
-                    Session.userId = u.getInt("id");
-                    Session.fullName = u.getString("fullName");
-
-                    SharedPreferences.Editor ed = getSharedPreferences("fieldops", MODE_PRIVATE).edit();
-                    ed.putString("token", token);
-                    ed.putInt("userId", Session.userId);
-                    ed.putString("fullName", Session.fullName);
-                    ed.putString("username", user);
-                    ed.putString("password", pass);
-                    ed.commit();
+                    SessionManager.INSTANCE.saveSession(
+                            token,
+                            refreshToken,
+                            u.getInt("id"),
+                            u.getString("fullName"),
+                            user
+                    );
 
                     startActivity(new Intent(LoginActivity.this, OrdersActivity.class));
                     finish();
                 } else {
-                    Toast.makeText(LoginActivity.this, json.getString("message"), Toast.LENGTH_LONG).show();
+                    Toast.makeText(
+                            LoginActivity.this,
+                            json.optString("message", "Usuario o clave incorrectos"),
+                            Toast.LENGTH_LONG
+                    ).show();
                 }
             } catch (Exception e) {
                 Toast.makeText(LoginActivity.this, "Error", Toast.LENGTH_SHORT).show();
